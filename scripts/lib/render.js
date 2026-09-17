@@ -63,9 +63,29 @@ export function renderReport(context, results, { color = true } = {}) {
   lines.push('');
 
   const sorted = sortResults(results);
-  lines.push(renderDashboard(sorted, { color }));
-  lines.push('');
+  const failed = sorted.filter((r) => r.status === 'fail');
 
+  // Details first (so the eye-catching summary lands at the very bottom).
+  if (failed.length === 0) {
+    lines.push(c.bold('FAIL DETAILS'));
+    lines.push(color ? pc.dim('No failing checks — see the summary below.') : 'No failing checks — see the summary below.');
+    lines.push('');
+  } else {
+    lines.push(c.bold(`FAIL DETAILS (${failed.length} of ${sorted.length} checks)`));
+    lines.push('');
+    failed.forEach((r) => {
+      lines.push(c.bold(`── ${r.name} ${'─'.repeat(Math.max(0, 60 - r.name.length))}`));
+      lines.push(`Status: ${statusColor[r.status] || r.status}  —  ${r.summary}`);
+      lines.push('');
+      for (const section of r.details || []) {
+        lines.push(renderDetail(section, { color }));
+        lines.push('');
+      }
+    });
+  }
+
+  // Improvements table + dashboard render last (they stay on screen when the
+  // command finishes and the terminal is scrolled to the bottom).
   lines.push(c.bold(`PERFORMANCE IMPROVEMENTS — ${context.finalUrl}`));
   const summaryTable = new Table({
     head: ['#', 'Check', 'Priority', 'Status', 'Summary'],
@@ -83,15 +103,7 @@ export function renderReport(context, results, { color = true } = {}) {
   lines.push(summaryTable.toString());
   lines.push('');
 
-  sorted.forEach((r) => {
-    lines.push(c.bold(`── ${r.name} ${'─'.repeat(Math.max(0, 60 - r.name.length))}`));
-    lines.push(`Status: ${statusColor[r.status] || r.status}  —  ${r.summary}`);
-    lines.push('');
-    for (const section of r.details || []) {
-      lines.push(renderDetail(section, { color }));
-      lines.push('');
-    }
-  });
+  lines.push(renderDashboard(sorted, { color }));
 
   return lines.join('\n');
 }

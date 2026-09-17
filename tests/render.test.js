@@ -41,3 +41,74 @@ test('renderReport: outputs a plain-text report without colors', () => {
   assert.match(output, /Test check/);
   assert.match(output, /sample summary/);
 });
+
+test('renderReport: details section only lists failing checks', () => {
+  const ctx = { url: 'http://x/', finalUrl: 'http://x/', status: 200 };
+  const results = [
+    {
+      id: 'pass-check',
+      name: 'Passing thing',
+      priority: 'medium',
+      status: 'pass',
+      summary: 'all good',
+      details: [{ type: 'iframes', title: 'PASS_DETAIL_MARKER', count: 0, iframes: [] }]
+    },
+    {
+      id: 'warn-check',
+      name: 'Warn thing',
+      priority: 'medium',
+      status: 'warn',
+      summary: 'could be better',
+      details: [{ type: 'iframes', title: 'WARN_DETAIL_MARKER', count: 1, iframes: [{ line: 1, label: '/x', flags: [] }] }]
+    },
+    {
+      id: 'fail-check',
+      name: 'Failing thing',
+      priority: 'high',
+      status: 'fail',
+      summary: 'oh no',
+      details: [{ type: 'iframes', title: 'FAIL_DETAIL_MARKER', count: 3, iframes: [{ line: 1, label: '/a', flags: [] }] }]
+    }
+  ];
+  const output = renderReport(ctx, results, { color: false });
+  // The improvements table still lists every check.
+  assert.match(output, /Passing thing/);
+  assert.match(output, /Warn thing/);
+  assert.match(output, /Failing thing/);
+  // Only the failing check contributes a detail section below.
+  assert.match(output, /FAIL DETAILS \(1 of 3 checks\)/);
+  assert.match(output, /FAIL_DETAIL_MARKER/);
+  assert.doesNotMatch(output, /PASS_DETAIL_MARKER/);
+  assert.doesNotMatch(output, /WARN_DETAIL_MARKER/);
+});
+
+test('renderReport: shows a friendly line when no checks fail', () => {
+  const ctx = { url: 'http://x/', finalUrl: 'http://x/', status: 200 };
+  const results = [
+    { id: 'a', name: 'A', priority: 'low', status: 'pass', summary: 'ok', details: [] },
+    { id: 'b', name: 'B', priority: 'low', status: 'warn', summary: 'meh', details: [] }
+  ];
+  const output = renderReport(ctx, results, { color: false });
+  assert.match(output, /No failing checks/);
+});
+
+test('renderReport: summary (improvements table + dashboard) is rendered last', () => {
+  const ctx = { url: 'http://x/', finalUrl: 'http://x/', status: 200 };
+  const results = [
+    {
+      id: 'fail-check',
+      name: 'Failing thing',
+      priority: 'high',
+      status: 'fail',
+      summary: 'oh no',
+      details: [{ type: 'iframes', title: 'FAIL_DETAIL_MARKER', count: 3, iframes: [{ line: 1, label: '/a', flags: [] }] }]
+    }
+  ];
+  const output = renderReport(ctx, results, { color: false });
+  const failIdx = output.indexOf('FAIL DETAILS');
+  const tableIdx = output.indexOf('PERFORMANCE IMPROVEMENTS');
+  const dashIdx = output.indexOf('PERFORMANCE DASHBOARD');
+  assert.ok(failIdx >= 0 && tableIdx >= 0 && dashIdx >= 0);
+  assert.ok(failIdx < tableIdx, 'details should come before improvements table');
+  assert.ok(tableIdx < dashIdx, 'improvements table should come before the dashboard');
+});
