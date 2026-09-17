@@ -212,6 +212,7 @@ function renderDetail(section, { color }) {
   if (section.type === 'breakdown') return renderBreakdown(section, color);
   if (section.type === 'css-before-js') return renderCssBeforeJs(section, color);
   if (section.type === 'iframes') return renderIframes(section, color);
+  if (section.type === 'css-minification') return renderCssMinification(section, color);
   return '';
 }
 
@@ -335,4 +336,121 @@ function renderIframes(section, color) {
   });
   lines.push(t.toString());
   return lines.join('\n');
+}
+
+function renderCssMinification(section, color) {
+  const lines = [];
+  lines.push(color ? pc.bold(section.title) : section.title);
+  const t = section.totals;
+  lines.push(
+    `Inline: ${formatInt(t.inlineCount)} · External fetched: ${formatInt(t.externalFetched)}/${formatInt(t.externalCount)} · ` +
+      `Raw ${formatKB(t.rawBytes)} → Min ${formatKB(t.minBytes)} · Savings ${formatKB(t.savings)}`
+  );
+  const residualExtra = (t.residualSavings ?? 0) - t.savings;
+  if (residualExtra > 0) {
+    const note = `  (plus ~${formatKB(residualExtra)} residual whitespace across already-minified files — not counted)`;
+    lines.push(color ? pc.dim(note) : note);
+  }
+
+  // Prominent list of URLs that still need minification — this is the
+  // primary actionable output for the user.
+  const notMinInline = section.styles
+    .filter((s) => !s.minified && s.savings > 0)
+    .map((s) => ({ label: `inline @ L${s.line ?? '?'}`, savings: s.savings }));
+  const notMinExternal = section.externals
+    .filter((e) => e.ok && !e.minified && e.savings > 0)
+    .map((e) => ({ label: e.href, savings: e.savings }));
+  const notMin = [...notMinExternal, ...notMinInline].sort((a, b) => b.savings - a.savings);
+  if (notMin.length > 0) {
+    const header = `Not minified — fix these (${notMin.length}):`;
+    lines.push(color ? pc.yellow(pc.bold(header)) : header);
+    for (const n of notMin) {
+      const bullet = `  • ${n.label}  — save ${formatKB(n.savings)}`;
+      lines.push(color ? pc.yellow(bullet) : bullet);
+    }
+  }
+
+  if (section.styles.length > 0) {
+    lines.push(color ? pc.bold('Inline <style> blocks') : 'Inline <style> blocks');
+    const tbl = new Table({
+      head: ['#', 'Line', 'Raw', 'Min', 'Savings', 'State'],
+      style: { head: color ? ['cyan'] : [], border: [] }
+    });
+    for (const s of section.styles) {
+      const state = s.minified
+        ? (color ? pc.green('✓ minified') : '✓ minified')
+        : (color ? pc.yellow('✗ not minified') : '✗ not minified');
+      tbl.push([
+        String(s.index),
+        s.line == null ? '—' : `L${s.line}`,
+        formatKB(s.rawBytes),
+        formatKB(s.minBytes),
+        formatKB(s.savings),
+        state
+      ]);
+    }
+    lines.push(tbl.toString());
+  }
+
+  if (section.externals.length > 0) {
+    lines.push(color ? pc.bold('External stylesheets') : 'External stylesheets');
+    const tbl = new Table({
+      head: ['#', 'URL', 'Status', 'Raw', 'Min', 'Savings', 'State'],
+      style: { head: color ? ['cyan'] : [], border: [] },
+      colWidths: [4, 80, 8, 9, 9, 10, 18],
+      wordWrap: true
+    });
+    for (const e of section.externals) {
+      const url = e.href;
+      if (!e.ok) {
+        const reason = e.error ? `${e.error.code}${e.error.message ? ': ' + e.error.message : ''}` : 'error';
+        const state = color ? pc.red(truncateStr(reason, 40)) : truncateStr(reason, 40);
+        tbl.push([
+          String(e.index),
+          url,
+          e.status == null ? '—' : String(e.status),
+          '—',
+          '—',
+          '—',
+          state
+        ]);
+      } else {
+        const state = e.minified
+          ? (color ? pc.green('✓ minified') : '✓ minified')
+          : (color ? pc.yellow('✗ not minified') : '✗ not minified');
+        tbl.push([
+          String(e.index),
+          url,
+          String(e.status),
+          formatKB(e.rawBytes),
+          formatKB(e.minBytes),
+          formatKB(e.savings),
+          state
+        ]);
+      }
+    }
+    lines.push(tbl.toString());
+  }
+
+  if (section.skipped && section.skipped.length > 0) {
+    const note = `Skipped past cap of ${section.skipped.length + section.externals.length}: ${section.skipped.length} stylesheets not fetched.`;
+    lines.push(color ? pc.dim(note) : note);
+    for (const s of section.skipped.slice(0, 5)) {
+      const line = s.line == null ? '—' : `L${s.line}`;
+      const msg = `  ${line}  ${s.href}`;
+      lines.push(color ? pc.dim(msg) : msg);
+    }
+    if (section.skipped.length > 5) {
+      const more = `  (+${section.skipped.length - 5} more)`;
+      lines.push(color ? pc.dim(more) : more);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function truncateStr(s, max) {
+  if (!s) return '';
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + '…';
 }

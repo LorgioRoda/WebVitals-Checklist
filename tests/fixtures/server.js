@@ -5,13 +5,34 @@
 import http from 'node:http';
 import zlib from 'node:zlib';
 
-export function startFixtureServer({ html, supported = ['br', 'gzip'], challenge = false } = {}) {
+export function startFixtureServer({ html, supported = ['br', 'gzip'], challenge = false, routes = {} } = {}) {
   const server = http.createServer((req, res) => {
     if (challenge) {
       const body =
         '<html><body>Access Denied. Reference: _abck challenge cf-ray</body></html>';
       res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(body);
+      return;
+    }
+
+    // Configurable non-HTML routes (e.g., CSS files) matched by exact pathname.
+    // A route value may be { status?, contentType?, body?, delayMs? } or a shorthand string body.
+    const route = routes[req.url];
+    if (route !== undefined) {
+      const spec = typeof route === 'string' ? { body: route } : route;
+      const send = () => {
+        const status = spec.status ?? 200;
+        const contentType = spec.contentType ?? 'text/css; charset=utf-8';
+        if (spec.body == null) {
+          res.writeHead(status, { 'Content-Type': contentType });
+          res.end();
+          return;
+        }
+        res.writeHead(status, { 'Content-Type': contentType });
+        res.end(Buffer.from(spec.body, 'utf8'));
+      };
+      if (spec.delayMs) setTimeout(send, spec.delayMs);
+      else send();
       return;
     }
 

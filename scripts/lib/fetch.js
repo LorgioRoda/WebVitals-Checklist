@@ -190,3 +190,119 @@ export async function fetchPage(url) {
     }
   };
 }
+
+// Fetch an auxiliary resource (CSS, JS, etc.) referenced by a page.
+// Follows up to 3 redirects. Uses a short timeout. Never throws — returns
+// { ok, status, body (utf8), contentType, transferredBytes, error }.
+export async function fetchResource(url, { timeoutMs = 8000 } = {}) {
+  const headers = { ...CHROME_HEADERS, 'Accept-Encoding': 'br, gzip, deflate' };
+  const maxRedirects = 3;
+  let currentUrl = url;
+  let hops = 0;
+  try {
+    // Inline request loop so we can use a shorter timeout than fetchPage.
+    while (true) {
+      const res = await new Promise((resolve, reject) => {
+        let parsed;
+        try {
+          parsed = new URL(currentUrl);
+        } catch (err) {
+          reject(new FetchError(`Invalid URL: ${currentUrl}`, { code: 'INVALID_URL' }));
+          return;
+        }
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+          reject(new FetchError(`Unsupported protocol: ${parsed.protocol}`, { code: 'UNSUPPORTED_PROTOCOL' }));
+          return;
+        }
+        const client = parsed.protocol === 'http:' ? http : https;
+        const options = {
+          method: 'GET',
+          hostname: parsed.hostname,
+          port: parsed.port || (parsed.protocol === 'http:' ? 80 : 443),
+          path: parsed.pathname + parsed.search,
+          headers: { Host: parsed.host, ...headers }
+        };
+        const req = client.request(options, (r) => {
+          const chunks = [];
+          let transferredBytes = 0;
+          r.on('data', (chunk) => {
+            chunks.push(chunk);
+            transferredBytes += chunk.length;
+          });
+          r.on('end', () => {
+            resolve({
+              statusCode: r.statusCode,
+              headers: r.headers,
+              body: Buffer.concat(chunks),
+              transferredBytes
+            });
+          });
+          r.on('error', reject);
+        });
+        req.setTimeout(timeoutMs, () => {
+          req.destroy(new FetchError(`Timed out after ${timeoutMs} ms`, { code: 'TIMEOUT' }));
+        });
+        req.on('error', (err) => {
+          if (err instanceof FetchError) reject(err);
+          else reject(new FetchError(err.message, { code: err.code || 'NETWORK_ERROR' }));
+        });
+        req.end();
+      });
+
+      const { statusCode, headers: resHeaders, body, transferredBytes } = res;
+      if (statusCode >= 300 && statusCode < 400 && resHeaders.location && hops < maxRedirects) {
+        currentUrl = new URL(resHeaders.location, currentUrl).toString();
+        hops++;
+        continue;
+      }
+      if (statusCode < 200 || statusCode >= 400) {
+        return {
+          ok: false,
+          url: currentUrl,
+          status: statusCode,
+          body: null,
+          contentType: resHeaders['content-type'] || null,
+          transferredBytes,
+          error: { code: 'HTTP_ERROR', message: `HTTP ${statusCode}` }
+        };
+      }
+      const contentEncoding = (resHeaders['content-encoding'] || '').toLowerCase() || null;
+      let decoded;
+      try {
+        decoded = decompress(body, contentEncoding).toString('utf8');
+      } catch (err) {
+        return {
+          ok: false,
+          url: currentUrl,
+          status: statusCode,
+          body: null,
+          contentType: resHeaders['content-type'] || null,
+          transferredBytes,
+          error: { code: 'DECODE_ERROR', message: err.message }
+        };
+      }
+      return {
+        ok: true,
+        url: currentUrl,
+        status: statusCode,
+        body: decoded,
+        contentType: resHeaders['content-type'] || null,
+        transferredBytes,
+        error: null
+      };
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      url: currentUrl,
+      status: null,
+      body: null,
+      contentType: null,
+      transferredBytes: 0,
+      error: {
+        code: err.code || 'NETWORK_ERROR',
+        message: err.message
+      }
+    };
+  }
+}
