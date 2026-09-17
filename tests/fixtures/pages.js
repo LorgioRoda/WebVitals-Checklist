@@ -42,3 +42,35 @@ export const minifiedHtml =
   '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
   '<title>Fixture</title><style>body{color:red;margin:0;padding:0}h1{font-size:2rem}</style>' +
   '</head><body class="home"><h1>Hello World</h1><p>Body text goes here and is not short so the fixture has some real weight to it.</p></body></html>';
+
+// Fixture for the css-in-body check. Contains exactly:
+//   - one <style> in <head> (must not be reported)
+//   - one early <style> in <body> with a height rule (High)
+//   - one late <style> with only color (Low)
+//   - one <style> containing @import (High)
+//   - one <style> inside <template> (ignored)
+//   - one <link rel="stylesheet"> in <body> (informational)
+export const cssInBodyHtml = `<!doctype html>
+<html>
+<head>
+<title>fixture</title>
+<style>body{margin:0}</style>
+</head>
+<body class="page">
+<div class="cmp-hero">
+<style>.cmp-hero__img{height:400px;width:100%}</style>
+<img src="/a.jpg" alt="">
+</div>
+<template>
+<style>.tpl{color:blue}</style>
+</template>
+<link rel="stylesheet" href="/late.css">
+<div class="cmp-later">
+<style>@import url("/x.css");</style>
+</div>
+${Array.from({ length: 40 }, (_, i) => `<p class="cmp-p-${i}">block ${i}</p>`).join('\n')}
+<footer id="site-footer">
+<style>.cmp-footer p{color:#333}</style>
+</footer>
+</body>
+</html>`;

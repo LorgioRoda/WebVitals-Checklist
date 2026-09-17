@@ -60,6 +60,10 @@ export function renderReport(context, results, { color = true } = {}) {
   lines.push(`${c.bold('URL:')}       ${context.url}`);
   lines.push(`${c.bold('Final URL:')} ${context.finalUrl}`);
   lines.push(`${c.bold('Status:')}    ${context.status}`);
+  if (context.ua) lines.push(`${c.bold('UA:')}        ${context.ua}`);
+  if (context.raw && context.raw.rawBytes != null) {
+    lines.push(`${c.bold('HTML size:')} ${formatKB(context.raw.rawBytes)}`);
+  }
   lines.push('');
 
   const sorted = sortResults(results);
@@ -213,6 +217,9 @@ function renderDetail(section, { color }) {
   if (section.type === 'css-before-js') return renderCssBeforeJs(section, color);
   if (section.type === 'iframes') return renderIframes(section, color);
   if (section.type === 'css-minification') return renderCssMinification(section, color);
+  if (section.type === 'css-in-body') return renderCssInBody(section, color);
+  if (section.type === 'webfont-formats') return renderWebfontFormats(section, color);
+  if (section.type === 'webfont-size') return renderWebfontSize(section, color);
   return '';
 }
 
@@ -453,4 +460,261 @@ function truncateStr(s, max) {
   if (!s) return '';
   if (s.length <= max) return s;
   return s.slice(0, max - 1) + '…';
+}
+
+function renderCssInBody(section, color) {
+  const lines = [];
+  lines.push(color ? pc.bold(section.title) : section.title);
+
+  // 1. Summary table.
+  const s = section.summary;
+  const totalBytes = section.blocks.reduce((a, b) => a + b.bytes, 0);
+  const summaryTable = new Table({
+    head: ['Blocks in body', 'Total bytes', 'High', 'Medium', 'Low', 'Ignored', '<link> in body'],
+    style: { head: color ? ['cyan'] : [], border: [] }
+  });
+  summaryTable.push([
+    formatInt(s.total),
+    formatKB(totalBytes),
+    sevCell('high', s.high, color),
+    sevCell('medium', s.medium, color),
+    sevCell('low', s.low, color),
+    formatInt(s.ignored),
+    formatInt(s.bodyLinks)
+  ]);
+  lines.push(summaryTable.toString());
+
+  // 2. Per-block detail table.
+  if (section.blocks.length > 0) {
+    const t = new Table({
+      head: ['#', 'Line', '% pos', 'Component', 'Bytes', 'Rules', 'Broad', 'Layout props', 'At-rules', 'Severity + reason'],
+      style: { head: color ? ['cyan'] : [], border: [] },
+      colWidths: [4, 8, 8, 22, 8, 7, 7, 26, 14, 34],
+      wordWrap: true
+    });
+    for (const b of section.blocks) {
+      t.push([
+        String(b.index),
+        b.line == null ? '—' : `L${b.line}`,
+        `${(b.pct * 100).toFixed(0)}%`,
+        b.context || '—',
+        formatKB(b.bytes),
+        formatInt(b.rules),
+        formatInt(b.broadSelectors),
+        b.layoutProps.length ? b.layoutProps.join(', ') : '—',
+        b.atRules.length ? b.atRules.map((a) => '@' + a).join(', ') : '—',
+        `${sevLabel(b.severity, color)} — ${b.reasons.join('; ')}`
+      ]);
+    }
+    lines.push(t.toString());
+  }
+
+  // 3. Preview for High/Medium blocks.
+  const risky = section.blocks.filter((b) => b.severity === 'high' || b.severity === 'medium');
+  if (risky.length > 0) {
+    lines.push(color ? pc.bold('CSS previews (first ~5 lines)') : 'CSS previews (first ~5 lines)');
+    for (const b of risky) {
+      const header = `  #${b.index} L${b.line ?? '?'} (${b.severity})`;
+      lines.push(color ? pc.yellow(header) : header);
+      for (const line of b.cssPreview) {
+        const rendered = `    ${line}`;
+        lines.push(color ? pc.dim(rendered) : rendered);
+      }
+    }
+  }
+
+  // 4. Ignored blocks.
+  if (section.ignored && section.ignored.length > 0) {
+    lines.push(color ? pc.dim(`Ignored (${section.ignored.length}):`) : `Ignored (${section.ignored.length}):`);
+    for (const ig of section.ignored) {
+      const msg = `  L${ig.line ?? '?'}  ${ig.reason}${ig.context ? ' — near ' + ig.context : ''}`;
+      lines.push(color ? pc.dim(msg) : msg);
+    }
+  }
+
+  // 5. Body <link rel=stylesheet> (informational, never penalized).
+  if (section.bodyLinks && section.bodyLinks.length > 0) {
+    const info = `<link rel="stylesheet"> in <body> (informational, HTTP/2 pattern):`;
+    lines.push(color ? pc.dim(info) : info);
+    for (const l of section.bodyLinks) {
+      const msg = `  L${l.line ?? '?'}  ${l.href || '(no href)'}`;
+      lines.push(color ? pc.dim(msg) : msg);
+    }
+  }
+
+  // 6. Verdict.
+  const verdictLine = `Verdict: ${section.verdict}`;
+  lines.push(color ? pc.bold(verdictLine) : verdictLine);
+
+  // 7. Limitations.
+  if (section.limitations && section.limitations.length > 0) {
+    lines.push(color ? pc.dim('Limitations:') : 'Limitations:');
+    for (const l of section.limitations) {
+      const msg = `  • ${l}`;
+      lines.push(color ? pc.dim(msg) : msg);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function sevCell(sev, n, color) {
+  const s = formatInt(n);
+  if (!color || n === 0) return s;
+  if (sev === 'high') return pc.red(s);
+  if (sev === 'medium') return pc.yellow(s);
+  return pc.green(s);
+}
+
+function sevLabel(sev, color) {
+  const label = sev.toUpperCase();
+  if (!color) return label;
+  if (sev === 'high') return pc.red(label);
+  if (sev === 'medium') return pc.yellow(label);
+  return pc.green(label);
+}
+
+function renderWebfontFormats(section, color) {
+  const lines = [];
+  lines.push(color ? pc.bold(section.title) : section.title);
+  const c = section.counts;
+  lines.push(
+    `Total: ${formatInt(c.total)} · WOFF2: ${formatInt(c.woff2)} · ` +
+      `WOFF: ${formatInt(c.woff)} · TTF: ${formatInt(c.ttf)} · OTF: ${formatInt(c.otf)} · ` +
+      `EOT: ${formatInt(c.eot)} · Unknown: ${formatInt(c.unknown)}`
+  );
+  lines.push(
+    `Sources — preload: ${formatInt(c.preloads)} · inline @font-face: ${formatInt(c.inline)} · ` +
+      `external @font-face: ${formatInt(c.external)} ` +
+      `(stylesheets scanned ${formatInt(c.externalStylesheetsScanned)}, failed ${formatInt(c.externalStylesheetsFailed)}, ` +
+      `skipped past cap ${formatInt(c.externalStylesheetsSkipped)})`
+  );
+
+  // Prominent list of non-WOFF2 URLs — the primary action.
+  const nonWoff2 = section.fonts.filter((f) => f.format !== 'woff2');
+  if (nonWoff2.length > 0) {
+    const header = `Not WOFF2 — replace these (${nonWoff2.length}):`;
+    lines.push(color ? pc.yellow(pc.bold(header)) : header);
+    for (const f of nonWoff2) {
+      const bullet = `  • [${f.format}] ${f.url}${f.family ? ' (' + f.family + ')' : ''}`;
+      lines.push(color ? pc.yellow(bullet) : bullet);
+    }
+  }
+
+  if (section.fonts.length > 0) {
+    const t = new Table({
+      head: ['#', 'Source', 'Family', 'URL', 'Format', 'State'],
+      style: { head: color ? ['cyan'] : [], border: [] },
+      colWidths: [4, 20, 22, 56, 10, 14],
+      wordWrap: true
+    });
+    section.fonts.forEach((f, i) => {
+      const state = f.format === 'woff2'
+        ? (color ? pc.green('✓ WOFF2') : '✓ WOFF2')
+        : f.format === 'unknown'
+          ? (color ? pc.dim('? unknown') : '? unknown')
+          : (color ? pc.yellow('✗ legacy') : '✗ legacy');
+      t.push([
+        String(i + 1),
+        f.source,
+        f.family || '—',
+        f.url,
+        f.format,
+        state
+      ]);
+    });
+    lines.push(t.toString());
+  }
+
+  if (section.fetchIssues && section.fetchIssues.length > 0) {
+    lines.push(color ? pc.dim(`Stylesheets that failed to fetch (${section.fetchIssues.length}):`) : `Stylesheets that failed to fetch (${section.fetchIssues.length}):`);
+    for (const f of section.fetchIssues.slice(0, 5)) {
+      const reason = f.error ? `${f.error.code}${f.error.message ? ': ' + f.error.message : ''}` : 'error';
+      const msg = `  ${f.status ?? '—'}  ${f.href}  — ${reason}`;
+      lines.push(color ? pc.dim(msg) : msg);
+    }
+    if (section.fetchIssues.length > 5) {
+      const more = `  (+${section.fetchIssues.length - 5} more)`;
+      lines.push(color ? pc.dim(more) : more);
+    }
+  }
+
+  if (section.skippedStylesheets && section.skippedStylesheets.length > 0) {
+    const note = `Skipped past cap (${section.skippedStylesheets.length} stylesheets not fetched)`;
+    lines.push(color ? pc.dim(note) : note);
+  }
+
+  return lines.join('\n');
+}
+
+function renderWebfontSize(section, color) {
+  const lines = [];
+  lines.push(color ? pc.bold(section.title) : section.title);
+  const pct = section.budget > 0 ? (section.totalBytes / section.budget) * 100 : 0;
+  const budgetLine =
+    `Total: ${formatKB(section.totalBytes)} / ${formatKB(section.budget)} budget (${pct.toFixed(0)}%) · ` +
+    `Fetched ${formatInt(section.counts.fetched)}/${formatInt(section.counts.discovered)} · ` +
+    `Failed ${formatInt(section.counts.failed)} · Skipped past cap: fonts ${formatInt(section.counts.skippedFonts)}, stylesheets ${formatInt(section.counts.skippedStylesheets)}`;
+  lines.push(budgetLine);
+
+  const over = section.totalBytes - section.budget;
+  if (over > 0) {
+    const msg = `Over budget by ${formatKB(over)}`;
+    lines.push(color ? pc.red(pc.bold(msg)) : msg);
+  }
+
+  if (section.fonts && section.fonts.length > 0) {
+    const t = new Table({
+      head: ['#', 'Family', 'URL', 'Sources', 'Size', 'Status', 'State'],
+      style: { head: color ? ['cyan'] : [], border: [] },
+      colWidths: [4, 20, 56, 22, 10, 8, 22],
+      wordWrap: true
+    });
+    section.fonts.forEach((f, i) => {
+      const sizeStr = f.ok ? formatKB(f.sizeBytes) : '—';
+      const statusStr = f.status == null ? '—' : String(f.status);
+      let state;
+      if (!f.ok) {
+        const reason = f.error ? `${f.error.code}` : 'error';
+        state = color ? pc.red(reason) : reason;
+      } else {
+        state = color ? pc.green('✓ fetched') : '✓ fetched';
+      }
+      t.push([
+        String(i + 1),
+        f.family || '—',
+        f.resolvedUrl,
+        f.sources.join(', '),
+        sizeStr,
+        statusStr,
+        state
+      ]);
+    });
+    lines.push(t.toString());
+  }
+
+  if (section.stylesheetFailures && section.stylesheetFailures.length > 0) {
+    const header = `Stylesheets that failed to fetch (${section.stylesheetFailures.length}):`;
+    lines.push(color ? pc.dim(header) : header);
+    for (const sf of section.stylesheetFailures.slice(0, 5)) {
+      const reason = sf.error ? `${sf.error.code}${sf.error.message ? ': ' + sf.error.message : ''}` : 'error';
+      const msg = `  ${sf.status ?? '—'}  ${sf.href}  — ${reason}`;
+      lines.push(color ? pc.dim(msg) : msg);
+    }
+    if (section.stylesheetFailures.length > 5) {
+      const more = `  (+${section.stylesheetFailures.length - 5} more)`;
+      lines.push(color ? pc.dim(more) : more);
+    }
+  }
+
+  if (section.skippedFonts && section.skippedFonts.length > 0) {
+    const note = `Skipped past cap (${section.skippedFonts.length} font${section.skippedFonts.length === 1 ? '' : 's'} not measured)`;
+    lines.push(color ? pc.dim(note) : note);
+  }
+  if (section.skippedStylesheets && section.skippedStylesheets.length > 0) {
+    const note = `Skipped past cap (${section.skippedStylesheets.length} stylesheet${section.skippedStylesheets.length === 1 ? '' : 's'} not scanned for @font-face)`;
+    lines.push(color ? pc.dim(note) : note);
+  }
+
+  return lines.join('\n');
 }

@@ -10,22 +10,29 @@ import { URL } from 'node:url';
 const MAX_REDIRECTS = 5;
 const REQUEST_TIMEOUT_MS = 20000;
 
-const CHROME_HEADERS = {
-  'User-Agent':
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
-    '(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-  Accept:
-    'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,' +
-    'image/webp,image/apng,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9',
-  'Cache-Control': 'no-cache',
-  Pragma: 'no-cache',
-  'Sec-Fetch-Dest': 'document',
-  'Sec-Fetch-Mode': 'navigate',
-  'Sec-Fetch-Site': 'none',
-  'Sec-Fetch-User': '?1',
-  'Upgrade-Insecure-Requests': '1'
-};
+const UA_DESKTOP =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+const UA_MOBILE =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 ' +
+  '(KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
+
+function chromeHeaders(ua = 'desktop') {
+  return {
+    'User-Agent': ua === 'mobile' ? UA_MOBILE : UA_DESKTOP,
+    Accept:
+      'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,' +
+      'image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1'
+  };
+}
 
 const CHALLENGE_MARKERS = [
   'access denied',
@@ -95,8 +102,8 @@ function requestOnce(targetUrl, headers) {
   });
 }
 
-async function fetchFollowingRedirects(startUrl, acceptEncoding) {
-  const headers = { ...CHROME_HEADERS, 'Accept-Encoding': acceptEncoding };
+async function fetchFollowingRedirects(startUrl, acceptEncoding, ua) {
+  const headers = { ...chromeHeaders(ua), 'Accept-Encoding': acceptEncoding };
   let currentUrl = startUrl;
   let hops = 0;
   while (true) {
@@ -141,8 +148,8 @@ function detectChallenge({ statusCode, html }) {
 // Public API. Fetches the page three times to learn which encodings the
 // server actually serves, and returns a shared context object that all
 // checks receive.
-export async function fetchPage(url) {
-  const browserRes = await fetchFollowingRedirects(url, 'br, gzip, deflate');
+export async function fetchPage(url, { ua = 'desktop' } = {}) {
+  const browserRes = await fetchFollowingRedirects(url, 'br, gzip, deflate', ua);
   const browserEncoding = (browserRes.headers['content-encoding'] || '').toLowerCase() || null;
   const html = decompress(browserRes.body, browserEncoding).toString('utf8');
 
@@ -156,8 +163,8 @@ export async function fetchPage(url) {
 
   // Probe br-only and gzip-only in parallel to see what the server serves.
   const [brRes, gzipRes] = await Promise.allSettled([
-    fetchFollowingRedirects(browserRes.finalUrl, 'br'),
-    fetchFollowingRedirects(browserRes.finalUrl, 'gzip')
+    fetchFollowingRedirects(browserRes.finalUrl, 'br', ua),
+    fetchFollowingRedirects(browserRes.finalUrl, 'gzip', ua)
   ]);
 
   const encodingOf = (r) =>
@@ -182,6 +189,7 @@ export async function fetchPage(url) {
     finalUrl: browserRes.finalUrl,
     status: browserRes.statusCode,
     responseHeaders: browserRes.headers,
+    ua,
     raw: { html, rawBytes },
     responses: {
       browser: { encoding: browserEncoding, transferredBytes: browserRes.transferredBytes },
@@ -194,8 +202,8 @@ export async function fetchPage(url) {
 // Fetch an auxiliary resource (CSS, JS, etc.) referenced by a page.
 // Follows up to 3 redirects. Uses a short timeout. Never throws — returns
 // { ok, status, body (utf8), contentType, transferredBytes, error }.
-export async function fetchResource(url, { timeoutMs = 8000 } = {}) {
-  const headers = { ...CHROME_HEADERS, 'Accept-Encoding': 'br, gzip, deflate' };
+export async function fetchResource(url, { timeoutMs = 8000, ua = 'desktop', binary = false } = {}) {
+  const headers = { ...chromeHeaders(ua), 'Accept-Encoding': 'br, gzip, deflate' };
   const maxRedirects = 3;
   let currentUrl = url;
   let hops = 0;
@@ -263,13 +271,14 @@ export async function fetchResource(url, { timeoutMs = 8000 } = {}) {
           body: null,
           contentType: resHeaders['content-type'] || null,
           transferredBytes,
+          sizeBytes: null,
           error: { code: 'HTTP_ERROR', message: `HTTP ${statusCode}` }
         };
       }
       const contentEncoding = (resHeaders['content-encoding'] || '').toLowerCase() || null;
-      let decoded;
+      let decompressed;
       try {
-        decoded = decompress(body, contentEncoding).toString('utf8');
+        decompressed = decompress(body, contentEncoding);
       } catch (err) {
         return {
           ok: false,
@@ -278,16 +287,19 @@ export async function fetchResource(url, { timeoutMs = 8000 } = {}) {
           body: null,
           contentType: resHeaders['content-type'] || null,
           transferredBytes,
+          sizeBytes: null,
           error: { code: 'DECODE_ERROR', message: err.message }
         };
       }
+      const sizeBytes = decompressed.length;
       return {
         ok: true,
         url: currentUrl,
         status: statusCode,
-        body: decoded,
+        body: binary ? decompressed : decompressed.toString('utf8'),
         contentType: resHeaders['content-type'] || null,
         transferredBytes,
+        sizeBytes,
         error: null
       };
     }
@@ -299,6 +311,7 @@ export async function fetchResource(url, { timeoutMs = 8000 } = {}) {
       body: null,
       contentType: null,
       transferredBytes: 0,
+      sizeBytes: null,
       error: {
         code: err.code || 'NETWORK_ERROR',
         message: err.message
