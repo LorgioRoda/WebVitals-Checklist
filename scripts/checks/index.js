@@ -3,5 +3,7 @@
 // interface (id, name, priority, async run(context)) and register it here.
 
 import htmlDocument from './html-document.js';
+import cssBeforeJs from './css-before-js.js';
+import iframes from './iframes.js';
 
-export const checks = [htmlDocument];
+export const checks = [htmlDocument, cssBeforeJs, iframes];

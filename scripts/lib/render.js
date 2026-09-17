@@ -63,6 +63,9 @@ export function renderReport(context, results, { color = true } = {}) {
   lines.push('');
 
   const sorted = sortResults(results);
+  lines.push(renderDashboard(sorted, { color }));
+  lines.push('');
+
   lines.push(c.bold(`PERFORMANCE IMPROVEMENTS — ${context.finalUrl}`));
   const summaryTable = new Table({
     head: ['#', 'Check', 'Priority', 'Status', 'Summary'],
@@ -93,6 +96,93 @@ export function renderReport(context, results, { color = true } = {}) {
   return lines.join('\n');
 }
 
+function renderDashboard(sorted, { color }) {
+  const width = 72;
+  const total = sorted.length;
+  const counts = { pass: 0, warn: 0, fail: 0 };
+  const priCounts = { high: 0, medium: 0, low: 0 };
+  for (const r of sorted) {
+    if (counts[r.status] !== undefined) counts[r.status]++;
+    if (priCounts[r.priority] !== undefined) priCounts[r.priority]++;
+  }
+
+  const top = sorted.find((r) => r.status !== 'pass');
+  const scoreLine = `Score: ${counts.pass}/${total} checks pass`;
+  const priLine =
+    `${dot('red', color)} ${priCounts.high} High   ` +
+    `${dot('yellow', color)} ${priCounts.medium} Medium   ` +
+    `${dot('cyan', color)} ${priCounts.low} Low`;
+  const passLine = `${statusIcon('pass', color)} Pass    ${counts.pass}`;
+  const warnLine = `${statusIcon('warn', color)} Improve ${counts.warn}`;
+  const failLine = `${statusIcon('fail', color)} Fail    ${counts.fail}`;
+  const rightColWidth = width - 7 - 34;
+  const topLine = top
+    ? truncateLine(`Top issue: ${top.name} (${PRIORITY_LABEL[top.priority] || top.priority})`, rightColWidth)
+    : 'No issues detected';
+
+  const title = ' PERFORMANCE DASHBOARD ';
+  const dashes = '─'.repeat(Math.max(0, width - title.length - 2));
+  const topBar = `┌${dashes.slice(0, Math.floor(dashes.length / 2))}${title}${dashes.slice(Math.floor(dashes.length / 2))}┐`;
+  const bottomBar = `└${'─'.repeat(width - 2)}┘`;
+  const sep = `├${'─'.repeat(width - 2)}┤`;
+
+  const leftCol = 34;
+  const rightCol = width - 7 - leftCol;
+
+  const rows = [
+    [scoreLine, priLine],
+    [passLine, ''],
+    [warnLine, topLine],
+    [failLine, '']
+  ];
+
+  const vbar = color ? pc.cyan('│') : '│';
+  const body = rows.map(
+    ([l, r]) => `${vbar} ${padVisible(l, leftCol)} ${vbar} ${padVisible(r, rightCol)} ${vbar}`
+  );
+
+  const framed = [
+    color ? pc.cyan(topBar) : topBar,
+    ...body.slice(0, 1),
+    color ? pc.cyan(sep) : sep,
+    ...body.slice(1),
+    color ? pc.cyan(bottomBar) : bottomBar
+  ];
+  return framed.join('\n');
+}
+
+// Length that ignores ANSI escape sequences.
+function visibleLength(s) {
+  return s.replace(/\[[0-9;]*m/g, '').length;
+}
+
+function padVisible(s, width) {
+  const len = visibleLength(s);
+  if (len >= width) return s;
+  return s + ' '.repeat(width - len);
+}
+
+function truncateLine(s, width) {
+  if (s.length <= width) return s;
+  if (width <= 1) return s.slice(0, width);
+  return s.slice(0, width - 1) + '…';
+}
+
+function dot(colorName, color) {
+  if (!color) return '●';
+  if (colorName === 'red') return pc.red('●');
+  if (colorName === 'yellow') return pc.yellow('●');
+  if (colorName === 'cyan') return pc.cyan('●');
+  return '●';
+}
+
+function statusIcon(status, color) {
+  if (status === 'pass') return color ? pc.green('✓') : '✓';
+  if (status === 'warn') return color ? pc.yellow('⚠') : '⚠';
+  if (status === 'fail') return color ? pc.red('✗') : '✗';
+  return '?';
+}
+
 function passthrough() {
   // Identity color helpers when color is disabled.
   const id = (s) => s;
@@ -108,6 +198,8 @@ function renderDetail(section, { color }) {
   if (section.type === 'compression') return renderCompression(section, color);
   if (section.type === 'minification') return renderMinification(section, color);
   if (section.type === 'breakdown') return renderBreakdown(section, color);
+  if (section.type === 'css-before-js') return renderCssBeforeJs(section, color);
+  if (section.type === 'iframes') return renderIframes(section, color);
   return '';
 }
 
@@ -175,6 +267,60 @@ function renderBreakdown(section, color) {
   for (const row of section.rows) {
     t.push([row.label, formatKB(row.bytes), formatPct(row.pct)]);
   }
+  lines.push(t.toString());
+  return lines.join('\n');
+}
+
+function renderCssBeforeJs(section, color) {
+  const lines = [];
+  lines.push(color ? pc.bold(section.title) : section.title);
+  const { scripts, styles, offenders } = section.totals;
+  lines.push(
+    `Scripts: ${formatInt(scripts)} · Stylesheets: ${formatInt(styles)} · Offending scripts: ${formatInt(offenders)}`
+  );
+  if (offenders === 0) return lines.join('\n');
+  const t = new Table({
+    head: ['Line', 'Script', 'Blocking?', 'CSS after'],
+    style: { head: color ? ['cyan'] : [], border: [] }
+  });
+  for (const o of section.offenders) {
+    const blocking = o.renderBlocking
+      ? (color ? pc.red('yes') : 'yes')
+      : (color ? pc.yellow('no') : 'no');
+    const cssPreview = o.cssAfter
+      .slice(0, 3)
+      .map((c) => `L${c.line ?? '?'} ${c.label}`)
+      .join('\n');
+    const more = o.cssAfter.length > 3 ? `\n(+${o.cssAfter.length - 3} more)` : '';
+    t.push([
+      o.line == null ? '—' : `L${o.line}`,
+      o.label,
+      blocking,
+      cssPreview + more
+    ]);
+  }
+  lines.push(t.toString());
+  return lines.join('\n');
+}
+
+function renderIframes(section, color) {
+  const lines = [];
+  lines.push(color ? pc.bold(section.title) : section.title);
+  lines.push(`Total iframes: ${formatInt(section.count)}`);
+  if (section.count === 0) return lines.join('\n');
+  const t = new Table({
+    head: ['#', 'Line', 'src', 'Flags'],
+    style: { head: color ? ['cyan'] : [], border: [] }
+  });
+  section.iframes.forEach((f, i) => {
+    const flags = f.flags.length ? f.flags.join(', ') : '—';
+    t.push([
+      String(i + 1),
+      f.line == null ? '—' : `L${f.line}`,
+      f.label,
+      flags
+    ]);
+  });
   lines.push(t.toString());
   return lines.join('\n');
 }
