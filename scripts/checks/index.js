@@ -9,6 +9,7 @@ import cssMinification from './css-minification.js';
 import cssInBody from './css-in-body.js';
 import webfontFormats from './webfont-formats.js';
 import webfontSize from './webfont-size.js';
+import imageOptimization from './image-optimization.js';
 
 export const checks = [
   htmlDocument,
@@ -17,5 +18,6 @@ export const checks = [
   cssMinification,
   cssInBody,
   webfontFormats,
-  webfontSize
+  webfontSize,
+  imageOptimization
 ];

@@ -67,17 +67,17 @@ export function renderReport(context, results, { color = true } = {}) {
   lines.push('');
 
   const sorted = sortResults(results);
-  const failed = sorted.filter((r) => r.status === 'fail');
+  const actionable = sorted.filter((r) => r.status === 'fail' || r.status === 'warn');
 
   // Details first (so the eye-catching summary lands at the very bottom).
-  if (failed.length === 0) {
-    lines.push(c.bold('FAIL DETAILS'));
-    lines.push(color ? pc.dim('No failing checks — see the summary below.') : 'No failing checks — see the summary below.');
+  if (actionable.length === 0) {
+    lines.push(c.bold('ISSUE DETAILS'));
+    lines.push(color ? pc.dim('No issues detected — see the summary below.') : 'No issues detected — see the summary below.');
     lines.push('');
   } else {
-    lines.push(c.bold(`FAIL DETAILS (${failed.length} of ${sorted.length} checks)`));
+    lines.push(c.bold(`ISSUE DETAILS (${actionable.length} of ${sorted.length} checks)`));
     lines.push('');
-    failed.forEach((r) => {
+    actionable.forEach((r) => {
       lines.push(c.bold(`── ${r.name} ${'─'.repeat(Math.max(0, 60 - r.name.length))}`));
       lines.push(`Status: ${statusColor[r.status] || r.status}  —  ${r.summary}`);
       lines.push('');
@@ -220,6 +220,7 @@ function renderDetail(section, { color }) {
   if (section.type === 'css-in-body') return renderCssInBody(section, color);
   if (section.type === 'webfont-formats') return renderWebfontFormats(section, color);
   if (section.type === 'webfont-size') return renderWebfontSize(section, color);
+  if (section.type === 'image-optimization') return renderImageOptimization(section, color);
   return '';
 }
 
@@ -713,6 +714,87 @@ function renderWebfontSize(section, color) {
   }
   if (section.skippedStylesheets && section.skippedStylesheets.length > 0) {
     const note = `Skipped past cap (${section.skippedStylesheets.length} stylesheet${section.skippedStylesheets.length === 1 ? '' : 's'} not scanned for @font-face)`;
+    lines.push(color ? pc.dim(note) : note);
+  }
+
+  return lines.join('\n');
+}
+
+function renderImageOptimization(section, color) {
+  const lines = [];
+  lines.push(color ? pc.bold(section.title) : section.title);
+  const t = section.totals;
+  const LEGACY_SET = new Set(['jpg', 'jpeg', 'png', 'gif', 'bmp', 'ico']);
+
+  // 1. Totals table only — no per-URL rows here.
+  const totalsTable = new Table({
+    head: ['Discovered', 'Fetched', 'Failed', 'Skipped', 'Total', 'Modern', 'Legacy', 'Legacy weight', 'Heavy >200 KB', 'Very heavy >500 KB'],
+    style: { head: color ? ['cyan'] : [], border: [] }
+  });
+  totalsTable.push([
+    formatInt(t.discovered),
+    formatInt(t.fetched),
+    formatInt(t.failed),
+    formatInt(t.skipped),
+    formatKB(t.totalWeight),
+    formatInt(t.modern),
+    formatInt(t.legacy),
+    formatKB(t.legacyWeight),
+    color && t.heavy > 0 ? pc.yellow(formatInt(t.heavy)) : formatInt(t.heavy),
+    color && t.veryHeavy > 0 ? pc.red(formatInt(t.veryHeavy)) : formatInt(t.veryHeavy)
+  ]);
+  lines.push(totalsTable.toString());
+
+  // 2. Second table: URLs that actually need optimizing (heavy or legacy).
+  const priority = section.images
+    .filter((r) => r.ok && (r.sizeBytes > 200 * 1024 || LEGACY_SET.has(r.format)))
+    .sort((a, b) => b.sizeBytes - a.sizeBytes);
+
+  if (priority.length > 0) {
+    const heading = `Images to optimize (${priority.length})`;
+    lines.push(color ? pc.bold(heading) : heading);
+    const tbl = new Table({
+      head: ['#', 'Size', 'Format', 'Why', 'URL'],
+      style: { head: color ? ['cyan'] : [], border: [] },
+      colWidths: [4, 10, 8, 20, 74],
+      wordWrap: true
+    });
+    priority.forEach((r, i) => {
+      const tags = [];
+      if (r.sizeBytes > 500 * 1024) tags.push('very heavy');
+      else if (r.sizeBytes > 200 * 1024) tags.push('heavy');
+      if (LEGACY_SET.has(r.format)) tags.push('legacy');
+      const why = tags.join(' + ');
+      const whyCell = color
+        ? (r.sizeBytes > 500 * 1024 ? pc.red(why) : pc.yellow(why))
+        : why;
+      tbl.push([
+        String(i + 1),
+        formatKB(r.sizeBytes),
+        r.format,
+        whyCell,
+        r.resolvedUrl
+      ]);
+    });
+    lines.push(tbl.toString());
+  }
+
+  if (section.fetchIssues && section.fetchIssues.length > 0) {
+    const header = `Failed to fetch (${section.fetchIssues.length}):`;
+    lines.push(color ? pc.dim(header) : header);
+    for (const f of section.fetchIssues.slice(0, 5)) {
+      const reason = f.error ? `${f.error.code}${f.error.message ? ': ' + f.error.message : ''}` : 'error';
+      const msg = `  ${f.status ?? '—'}  ${f.url}  — ${reason}`;
+      lines.push(color ? pc.dim(msg) : msg);
+    }
+    if (section.fetchIssues.length > 5) {
+      const more = `  (+${section.fetchIssues.length - 5} more)`;
+      lines.push(color ? pc.dim(more) : more);
+    }
+  }
+
+  if (section.skippedUrls && section.skippedUrls.length > 0) {
+    const note = `Skipped past cap (${section.skippedUrls.length} image${section.skippedUrls.length === 1 ? '' : 's'} not fetched)`;
     lines.push(color ? pc.dim(note) : note);
   }
 

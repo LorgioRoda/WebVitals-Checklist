@@ -42,7 +42,7 @@ test('renderReport: outputs a plain-text report without colors', () => {
   assert.match(output, /sample summary/);
 });
 
-test('renderReport: details section only lists failing checks', () => {
+test('renderReport: details section lists failing AND warn checks (not pass)', () => {
   const ctx = { url: 'http://x/', finalUrl: 'http://x/', status: 200 };
   const results = [
     {
@@ -75,21 +75,21 @@ test('renderReport: details section only lists failing checks', () => {
   assert.match(output, /Passing thing/);
   assert.match(output, /Warn thing/);
   assert.match(output, /Failing thing/);
-  // Only the failing check contributes a detail section below.
-  assert.match(output, /FAIL DETAILS \(1 of 3 checks\)/);
+  // Fail + warn contribute details; pass is skipped.
+  assert.match(output, /ISSUE DETAILS \(2 of 3 checks\)/);
   assert.match(output, /FAIL_DETAIL_MARKER/);
+  assert.match(output, /WARN_DETAIL_MARKER/);
   assert.doesNotMatch(output, /PASS_DETAIL_MARKER/);
-  assert.doesNotMatch(output, /WARN_DETAIL_MARKER/);
 });
 
-test('renderReport: shows a friendly line when no checks fail', () => {
+test('renderReport: shows a friendly line when no checks fail or warn', () => {
   const ctx = { url: 'http://x/', finalUrl: 'http://x/', status: 200 };
   const results = [
     { id: 'a', name: 'A', priority: 'low', status: 'pass', summary: 'ok', details: [] },
-    { id: 'b', name: 'B', priority: 'low', status: 'warn', summary: 'meh', details: [] }
+    { id: 'b', name: 'B', priority: 'low', status: 'pass', summary: 'ok', details: [] }
   ];
   const output = renderReport(ctx, results, { color: false });
-  assert.match(output, /No failing checks/);
+  assert.match(output, /No issues detected/);
 });
 
 test('renderReport: summary (improvements table + dashboard) is rendered last', () => {
@@ -105,7 +105,7 @@ test('renderReport: summary (improvements table + dashboard) is rendered last', 
     }
   ];
   const output = renderReport(ctx, results, { color: false });
-  const failIdx = output.indexOf('FAIL DETAILS');
+  const failIdx = output.indexOf('ISSUE DETAILS');
   const tableIdx = output.indexOf('PERFORMANCE IMPROVEMENTS');
   const dashIdx = output.indexOf('PERFORMANCE DASHBOARD');
   assert.ok(failIdx >= 0 && tableIdx >= 0 && dashIdx >= 0);

@@ -332,9 +332,6 @@ export default {
 
     const nonWoff2 = counts.woff + counts.ttf + counts.otf + counts.eot + counts.svg;
 
-    const legacyFonts = all.filter((f) => f.format !== 'woff2' && f.format !== 'unknown');
-    const unknownFonts = all.filter((f) => f.format === 'unknown');
-
     let status;
     let summary;
     if (counts.total === 0) {
@@ -346,8 +343,6 @@ export default {
     } else if (counts.woff2 > 0 && nonWoff2 > 0) {
       status = 'warn';
       summary = `${counts.woff2} WOFF2 + ${nonWoff2} legacy font source${nonWoff2 === 1 ? '' : 's'} — drop legacy`;
-      const tail = urlHint(legacyFonts);
-      if (tail) summary += tail;
     } else if (counts.woff2 === 0 && nonWoff2 > 0) {
       status = 'fail';
       summary = `no WOFF2 sources — ${nonWoff2} legacy font source${nonWoff2 === 1 ? '' : 's'} detected`;
@@ -355,8 +350,6 @@ export default {
       // Only unknown-format sources present.
       status = 'warn';
       summary = `${counts.unknown} font source${counts.unknown === 1 ? '' : 's'} of unknown format`;
-      const tail = urlHint(unknownFonts);
-      if (tail) summary += tail;
     }
 
     const details = [
@@ -384,17 +377,3 @@ export default {
   }
 };
 
-// Append up to 3 example URLs to a warn/fail summary so the user can act
-// even when the fail-details section is hidden (e.g., for warn checks).
-function urlHint(fonts) {
-  if (!fonts || fonts.length === 0) return '';
-  const MAX = 3;
-  const show = fonts.slice(0, MAX).map((f) => truncate(f.url || '(no url)', 60));
-  const suffix = fonts.length > MAX ? ` (+${fonts.length - MAX} more)` : '';
-  return `: ${show.join(', ')}${suffix}`;
-}
-
-function truncate(s, max) {
-  if (s.length <= max) return s;
-  return s.slice(0, max - 1) + '…';
-}
