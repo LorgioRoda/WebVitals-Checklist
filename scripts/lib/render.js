@@ -724,28 +724,62 @@ function renderImageOptimization(section, color) {
   const lines = [];
   lines.push(color ? pc.bold(section.title) : section.title);
   const t = section.totals;
-  const LEGACY_SET = new Set(['jpg', 'jpeg', 'png', 'gif', 'bmp', 'ico']);
+  const LEGACY_SET = new Set(['jpeg', 'png', 'gif', 'bmp', 'ico']);
 
-  // 1. Totals table only — no per-URL rows here.
+  // 1. Totals table. "Groups" = responsive image slots; "Variants" = the
+  //    raw count of URLs found in the HTML (srcset entries etc.). Only
+  //    one variant per group is fetched (the largest).
   const totalsTable = new Table({
-    head: ['Discovered', 'Fetched', 'Failed', 'Skipped', 'Total', 'Modern', 'Legacy', 'Legacy weight', 'Heavy >200 KB', 'Very heavy >500 KB'],
+    head: ['Groups', 'Variants seen', 'Fetched', 'Failed', 'Skipped', 'Total (decoded)', 'Total (on wire)', 'Modern', 'Legacy', 'Legacy weight', 'Heavy >200 KB', 'Very heavy >500 KB', 'CDN-converted'],
     style: { head: color ? ['cyan'] : [], border: [] }
   });
   totalsTable.push([
     formatInt(t.discovered),
+    formatInt(t.variantsInGroups),
     formatInt(t.fetched),
     formatInt(t.failed),
     formatInt(t.skipped),
     formatKB(t.totalWeight),
+    formatKB(t.transferredWeight),
     formatInt(t.modern),
     formatInt(t.legacy),
     formatKB(t.legacyWeight),
     color && t.heavy > 0 ? pc.yellow(formatInt(t.heavy)) : formatInt(t.heavy),
-    color && t.veryHeavy > 0 ? pc.red(formatInt(t.veryHeavy)) : formatInt(t.veryHeavy)
+    color && t.veryHeavy > 0 ? pc.red(formatInt(t.veryHeavy)) : formatInt(t.veryHeavy),
+    color && t.cdnTransformed > 0 ? pc.green(formatInt(t.cdnTransformed)) : formatInt(t.cdnTransformed)
   ]);
   lines.push(totalsTable.toString());
 
-  // 2. Second table: URLs that actually need optimizing (heavy or legacy).
+  // 2. CDN content-negotiation insight. Highlights URLs where the file
+  //    extension says one format but the CDN actually served another.
+  const cdnConverted = section.images.filter((r) => r.ok && r.cdnTransformed);
+  if (cdnConverted.length > 0) {
+    const heading = `CDN converted format on the fly (${cdnConverted.length}) — extension differs from served Content-Type`;
+    lines.push(color ? pc.green(pc.bold(heading)) : heading);
+    const tbl = new Table({
+      head: ['#', 'URL says', 'CDN served', 'Size', 'Variant', 'URL'],
+      style: { head: color ? ['cyan'] : [], border: [] },
+      colWidths: [4, 12, 12, 10, 12, 90],
+      wordWrap: true,
+      wrapOnWordBoundary: false
+    });
+    cdnConverted.forEach((r, i) => {
+      const variantLabel = r.variantCount > 1
+        ? `${r.descriptor} (of ${r.variantCount})`
+        : r.descriptor;
+      tbl.push([
+        String(i + 1),
+        r.urlFormat,
+        r.format,
+        formatKB(r.sizeBytes),
+        variantLabel,
+        r.resolvedUrl
+      ]);
+    });
+    lines.push(tbl.toString());
+  }
+
+  // 3. URLs that actually need optimizing (heavy or served-as-legacy).
   const priority = section.images
     .filter((r) => r.ok && (r.sizeBytes > 200 * 1024 || LEGACY_SET.has(r.format)))
     .sort((a, b) => b.sizeBytes - a.sizeBytes);
@@ -754,24 +788,30 @@ function renderImageOptimization(section, color) {
     const heading = `Images to optimize (${priority.length})`;
     lines.push(color ? pc.bold(heading) : heading);
     const tbl = new Table({
-      head: ['#', 'Size', 'Format', 'Why', 'URL'],
+      head: ['#', 'Decoded', 'On wire', 'Served', 'Variant', 'Why', 'URL'],
       style: { head: color ? ['cyan'] : [], border: [] },
-      colWidths: [4, 10, 8, 20, 74],
-      wordWrap: true
+      colWidths: [4, 10, 10, 10, 12, 22, 90],
+      wordWrap: true,
+      wrapOnWordBoundary: false
     });
     priority.forEach((r, i) => {
       const tags = [];
       if (r.sizeBytes > 500 * 1024) tags.push('very heavy');
       else if (r.sizeBytes > 200 * 1024) tags.push('heavy');
-      if (LEGACY_SET.has(r.format)) tags.push('legacy');
+      if (LEGACY_SET.has(r.format)) tags.push('legacy served');
       const why = tags.join(' + ');
       const whyCell = color
         ? (r.sizeBytes > 500 * 1024 ? pc.red(why) : pc.yellow(why))
         : why;
+      const variantLabel = r.variantCount > 1
+        ? `${r.descriptor} (of ${r.variantCount})`
+        : r.descriptor;
       tbl.push([
         String(i + 1),
         formatKB(r.sizeBytes),
+        formatKB(r.transferredBytes),
         r.format,
+        variantLabel,
         whyCell,
         r.resolvedUrl
       ]);

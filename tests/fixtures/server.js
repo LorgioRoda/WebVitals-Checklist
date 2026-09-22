@@ -16,10 +16,14 @@ export function startFixtureServer({ html, supported = ['br', 'gzip'], challenge
     }
 
     // Configurable non-HTML routes (e.g., CSS files) matched by exact pathname.
-    // A route value may be { status?, contentType?, body?, delayMs? } or a shorthand string body.
+    // A route value may be:
+    //   - a shorthand string body,
+    //   - an object { status?, contentType?, body?, delayMs? },
+    //   - a function (req) => object — useful for Accept-based content negotiation.
     const route = routes[req.url];
     if (route !== undefined) {
-      const spec = typeof route === 'string' ? { body: route } : route;
+      const resolved = typeof route === 'function' ? route(req) : route;
+      const spec = typeof resolved === 'string' ? { body: resolved } : resolved;
       const send = () => {
         const status = spec.status ?? 200;
         const contentType = spec.contentType ?? 'text/css; charset=utf-8';

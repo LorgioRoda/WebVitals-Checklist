@@ -199,11 +199,36 @@ export async function fetchPage(url, { ua = 'desktop' } = {}) {
   };
 }
 
+// Headers that mimic a Chrome image subresource request. Crucially this
+// does NOT include Cache-Control: no-cache or Sec-Fetch-Dest: document —
+// those trip CDN image optimizers (Cloudflare Polish, Cloudinary f_auto,
+// Fastly Image Optimizer) into returning the origin bytes instead of the
+// cached, format-negotiated variant.
+function chromeImageHeaders(ua = 'desktop', referer = null) {
+  const h = {
+    'User-Agent': ua === 'mobile' ? UA_MOBILE : UA_DESKTOP,
+    Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Sec-Fetch-Dest': 'image',
+    'Sec-Fetch-Mode': 'no-cors',
+    'Sec-Fetch-Site': 'cross-site'
+  };
+  if (referer) h.Referer = referer;
+  return h;
+}
+
 // Fetch an auxiliary resource (CSS, JS, etc.) referenced by a page.
 // Follows up to 3 redirects. Uses a short timeout. Never throws — returns
 // { ok, status, body (utf8), contentType, transferredBytes, error }.
-export async function fetchResource(url, { timeoutMs = 8000, ua = 'desktop', binary = false } = {}) {
-  const headers = { ...chromeHeaders(ua), 'Accept-Encoding': 'br, gzip, deflate' };
+//
+// `asImage: true` sends browser-like image request headers (no
+// Cache-Control override, Sec-Fetch-Dest: image, plus a Referer if
+// provided) — required for CDN image optimizers to serve their
+// transformed variant instead of falling through to the origin.
+export async function fetchResource(url, { timeoutMs = 8000, ua = 'desktop', binary = false, accept = null, asImage = false, referer = null } = {}) {
+  const baseHeaders = asImage ? chromeImageHeaders(ua, referer) : chromeHeaders(ua);
+  const headers = { ...baseHeaders, 'Accept-Encoding': 'br, gzip, deflate' };
+  if (accept) headers.Accept = accept;
   const maxRedirects = 3;
   let currentUrl = url;
   let hops = 0;
@@ -270,6 +295,7 @@ export async function fetchResource(url, { timeoutMs = 8000, ua = 'desktop', bin
           status: statusCode,
           body: null,
           contentType: resHeaders['content-type'] || null,
+          contentEncoding: (resHeaders['content-encoding'] || '').toLowerCase() || null,
           transferredBytes,
           sizeBytes: null,
           error: { code: 'HTTP_ERROR', message: `HTTP ${statusCode}` }
@@ -286,6 +312,7 @@ export async function fetchResource(url, { timeoutMs = 8000, ua = 'desktop', bin
           status: statusCode,
           body: null,
           contentType: resHeaders['content-type'] || null,
+          contentEncoding,
           transferredBytes,
           sizeBytes: null,
           error: { code: 'DECODE_ERROR', message: err.message }
@@ -298,6 +325,7 @@ export async function fetchResource(url, { timeoutMs = 8000, ua = 'desktop', bin
         status: statusCode,
         body: binary ? decompressed : decompressed.toString('utf8'),
         contentType: resHeaders['content-type'] || null,
+        contentEncoding,
         transferredBytes,
         sizeBytes,
         error: null
@@ -310,6 +338,7 @@ export async function fetchResource(url, { timeoutMs = 8000, ua = 'desktop', bin
       status: null,
       body: null,
       contentType: null,
+      contentEncoding: null,
       transferredBytes: 0,
       sizeBytes: null,
       error: {
