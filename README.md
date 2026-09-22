@@ -250,11 +250,3 @@ cover encoding detection, minification detection, breakdown totals, the
 list sort order, bot-challenge abort, CSS/font/image discovery,
 srcset grouping, and CDN content-negotiation detection.
 
-## Claude Code skill
-
-The repository ships a skill at `.claude/skills/perf-audit/SKILL.md`.
-When launched from the project root, Claude Code picks it up
-automatically whenever the user asks to audit / analyze / review the
-performance of a URL. The skill runs the pretty report first, then
-reads `--json` if it needs exact numbers, then adds a short
-interpretation grounded only in the script output.
